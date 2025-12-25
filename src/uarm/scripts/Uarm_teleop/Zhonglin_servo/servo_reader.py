@@ -50,6 +50,7 @@ class ServoReaderNode:
         target_angle_offset = [0.0] * 7  # Target angle for each servo
         num_interp = 5  # Interpolation steps
         step_size = 1  # Minimum change threshold
+        danger_thres = 90
 
         while not rospy.is_shutdown():
             for i in range(7):
@@ -57,7 +58,9 @@ class ServoReaderNode:
                 angle = self.pwm_to_angle(response.strip())
                 if angle is not None:
                     new_angle = angle - self.zero_angles[i]
-                    if abs(new_angle - target_angle_offset[i]) > step_size:
+                    if abs(new_angle - target_angle_offset[i]) > 90:
+                        raise Warning(f"Servo {i} angle jump too large: {new_angle} vs {target_angle_offset[i]}, check if hardware adjustment is needed.")
+                    elif abs(new_angle - target_angle_offset[i]) > step_size:
                         target_angle_offset[i] = new_angle
                 else:
                     rospy.logwarn(f"Servo {i} response error: {response.strip()}")

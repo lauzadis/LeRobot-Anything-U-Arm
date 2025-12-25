@@ -169,6 +169,7 @@ We welcome contributions! Here's how you can help:
 **A:** Please first refer to the **Supported Robots** section above, where part of compatible arms are listed along with corresponding config.  Note that this project aims to provide a **universal teleoperation framework** and example control code. Here, “compatibility” means that the operator can intuitively control the corresponding follower arm on hardware side by using UArm.  
 This is independent of different brands’ software APIs — it only depends on the **joint topology** of the robot.  To find your robot’s joint topology, check [Hardware Guide](https://docs.google.com/document/d/1TjhJOeJXsD5kmoYF-kuWfPju6WSUeSnivJiU7TH4vWs/edit?tab=t.0#heading=h.k991lzlarfb8).
 
+
 ---
 
 ### 2. How can I develop based on my own follower arm?
