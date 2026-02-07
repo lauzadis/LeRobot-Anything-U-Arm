@@ -7,7 +7,7 @@ sys.path.append("..")
 from scservo_sdk import *
 
 
-portHandler = PortHandler('/dev/ttyUSB0')
+portHandler = PortHandler('/dev/ttyACM0')
 packetHandler = sms_sts(portHandler)
 
 # Open port

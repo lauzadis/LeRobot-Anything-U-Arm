@@ -13,7 +13,12 @@ import rtde_receive
 
 # ===== Configuration =====
 UARM_PORT = '/dev/ttyACM0'
-UR5_IP = "192.168.1.150"
+
+SIMULATION_MODE = True
+if SIMULATION_MODE:
+    UR5_IP = "localhost"  # CB3 URSim
+else:
+    UR5_IP = "192.168.1.150"  # Your real CB3 robot
 
 # Mapping from UARM servo angles to UR5 joint positions
 # You'll need to calibrate these ranges for your specific setup
@@ -25,8 +30,9 @@ UR5_MIN = np.array([-2*np.pi, -2*np.pi, -2*np.pi, -2*np.pi, -2*np.pi, -2*np.pi])
 UR5_MAX = np.array([2*np.pi, 2*np.pi, 2*np.pi, 2*np.pi, 2*np.pi, 2*np.pi])
 
 # Control parameters
-VELOCITY = 0.5  # rad/s - adjust for smoother/faster movement
-ACCELERATION = 0.5  # rad/s^2
+VELOCITY = 0.05  # rad/s - adjust for smoother/faster movement
+ACCELERATION = 0.05  # rad/s^2
+CONTROL_GAIN = 0.2
 UPDATE_RATE = 0.01  # 100 Hz update rate
 
 # ===== Initialize UARM =====
@@ -46,6 +52,7 @@ else:
     quit()
 
 # Set all servos' half position (your original calibration code)
+print("\nCalibrating UARM servos...")
 for scs_id in range(1, 8):
     packetHandler.unLockEprom(scs_id)
     time.sleep(0.1)
@@ -90,10 +97,24 @@ def map_uarm_to_ur5(uarm_angles):
     # Simple linear mapping - you'll need to calibrate this!
     # This assumes first 6 UARM servos map to 6 UR5 joints
     ur5_joints = np.zeros(6)
+
+    # Inversion flags: True = invert this joint, False = normal
+    # 1 TRUE
+    # 2 FALSE
+    # 3 TRUE
+    # 4 TRUE?
+    # 5 TRUE?
+    # 6
+    invert = [True, False, True, True, True, False]  # Adjust per joint as needed
     
     for i in range(6):
         # Normalize UARM angle to 0-1
         normalized = (uarm_angles[i] - UARM_MIN[i]) / (UARM_MAX[i] - UARM_MIN[i])
+
+        # Invert if needed
+        if invert[i]:
+            normalized = 1.0 - normalized
+
         # Map to UR5 range
         ur5_joints[i] = UR5_MIN[i] + normalized * (UR5_MAX[i] - UR5_MIN[i])
     
@@ -103,7 +124,7 @@ def clamp_joints(joints):
     """Clamp joint values to safe limits"""
     return np.clip(joints, UR5_MIN, UR5_MAX)
 
-def check_safety(current_joints, target_joints, max_delta=0.1):
+def check_safety(current_joints, target_joints, max_delta=0.25):
     """
     Safety check: ensure commanded motion isn't too large
     max_delta in radians per update
@@ -114,10 +135,52 @@ def check_safety(current_joints, target_joints, max_delta=0.1):
         return False
     return True
 
-# ===== Main Control Loop =====
+# ===== Setup Group Read =====
 groupSyncRead = GroupSyncRead(packetHandler, SMS_STS_PRESENT_POSITION_L, 4)
 angle_pos = np.zeros(7)
 
+# ===== Gradual Initialization =====
+print("\n" + "="*50)
+print("INITIALIZATION")
+print("="*50)
+print("The UR5 will move to match the leader arm position.")
+print("Ensure the area around the UR5 is clear!")
+input("\nPress ENTER when ready to initialize...")
+
+# Read initial UARM position
+for scs_id in range(1, 8):
+    scs_addparam_result = groupSyncRead.addParam(scs_id)
+    if not scs_addparam_result:
+        print(f"[ID:{scs_id:03d}] groupSyncRead addparam failed")
+
+scs_comm_result = groupSyncRead.txRxPacket()
+if scs_comm_result != COMM_SUCCESS:
+    print(f"Communication error: {packetHandler.getTxRxResult(scs_comm_result)}")
+
+for scs_id in range(1, 8):
+    scs_data_result, scs_error = groupSyncRead.isAvailable(scs_id, SMS_STS_PRESENT_POSITION_L, 4)
+    if scs_data_result:
+        angle_pos[scs_id - 1] = groupSyncRead.getData(scs_id, SMS_STS_PRESENT_POSITION_L, 2)
+
+groupSyncRead.clearParam()
+
+# Calculate and display target position
+current_ur5 = np.array(rtde_r.getActualQ())
+target_position = map_uarm_to_ur5(angle_pos)
+target_position = clamp_joints(target_position)
+
+print(f"\nCurrent UR5: {np.rad2deg(current_ur5).astype(int)}°")
+print(f"Target UR5:  {np.rad2deg(target_position).astype(int)}°")
+print(f"UARM readings: {angle_pos[:6].astype(int)}")
+print("\nMoving to initial position (this may take a few seconds)...")
+
+# Slowly move to target position
+rtde_c.moveJ(target_position.tolist(), 0.5, 0.3)
+
+print("✓ Initialization complete!")
+time.sleep(0.5)
+
+# ===== Main Control Loop =====
 print("\n" + "="*50)
 print("Starting teleoperation control")
 print("Press Ctrl+C to stop")
@@ -157,15 +220,27 @@ try:
         target_ur5_joints = map_uarm_to_ur5(angle_pos)
         target_ur5_joints = clamp_joints(target_ur5_joints)
         
-        # Safety check
-        if check_safety(current_ur5_joints, target_ur5_joints):
-            # Send command to UR5
-            rtde_c.servoJ(target_ur5_joints.tolist(), VELOCITY, ACCELERATION, UPDATE_RATE, 0.2, 300)
+        delta = np.abs(target_ur5_joints - current_ur5_joints)
+        max_safe_delta = 0.25
+
+        if np.any(delta > max_safe_delta):
+            # Movement too large - clamp it to max safe distance
+            print(f"⚠ Large movement detected - clamping to safe speed")
+            direction = target_ur5_joints - current_ur5_joints
+            # Normalize and scale to max safe delta
+            for i in range(6):
+                if abs(direction[i]) > max_safe_delta:
+                    direction[i] = np.sign(direction[i]) * max_safe_delta
+            intermediate_target = current_ur5_joints + CONTROL_GAIN * direction
         else:
-            print("⚠ Safety check failed - skipping this command")
-        
+            # Normal operation
+            intermediate_target = current_ur5_joints + CONTROL_GAIN * (target_ur5_joints - current_ur5_joints)
+
+        # ADD THIS LINE:
+        rtde_c.servoJ(intermediate_target.tolist(), VELOCITY, ACCELERATION, UPDATE_RATE, 0.2, 300)
+
         # Display status
-        print(f"UARM: {angle_pos[:6].astype(int)} -> UR5: {np.rad2deg(target_ur5_joints).astype(int)}")
+        print(f"UARM: {angle_pos[:6].astype(int)} -> UR5: {np.rad2deg(target_ur5_joints).astype(int)}°")
         
         time.sleep(UPDATE_RATE)
 
