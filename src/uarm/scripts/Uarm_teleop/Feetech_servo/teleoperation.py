@@ -18,7 +18,8 @@ import rtde_receive
 @dataclass
 class TeleopConfig:
     # UARM serial port
-    uarm_port: str = '/dev/cu.usbmodem5AE60548261'
+    # uarm_port: str = '/dev/cu.usbmodem5AE60548261'
+    uarm_port: str = '/dev/TTYACM0'
 
     # UR5 network
     ur5_ip: str = "192.168.1.150"
